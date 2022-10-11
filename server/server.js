@@ -6,6 +6,13 @@ const port = 3003;
 const mongoose = require("mongoose");
 const User = require("./schemas/user-schema.js");
 const jwt = require("jsonwebtoken");
+const passport = require("passport");
+const passportJWT = require("passport-jwt");
+const ExtractJwt = passportJWT.ExtractJwt;
+const JwtStrategy = passportJWT.Strategy;
+const bcrypt = require("bcrypt");
+const dotenv = require("dotenv");
+dotenv.config();
 
 app.use(express.json());
 app.use(cors());
@@ -23,7 +30,29 @@ try {
   console.log("could not connect");
 }
 
+// strategy for checking if user is signed in or not
+const jwtOptions = {
+  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+  secretOrKey: process.env.jwt_secret,
+};
+
+const strategy = new JwtStrategy(jwtOptions, async function (
+  jwt_payload,
+  next
+) {
+  const user = await User.findOne({ _id: jwt_payload._id });
+  if (user) {
+    next(null, user);
+  } else {
+    next(null, false);
+  }
+});
+passport.use(strategy);
+app.use(passport.initialize());
+// strategy for checking if user is signed in or not --end
+
 app.post("/auth/signup", (req, res) => {
+  console.log("sign up");
   const user = new User({
     email: req.body.email,
     password: req.body.password,
@@ -42,25 +71,41 @@ app.post("/auth/signup", (req, res) => {
   });
 });
 
-app.get("/auth/signin", (req, res) => {
+app.post("/auth/signin", (req, res) => {
+  console.log("sign in");
   const email = req.body.email;
   const password = req.body.password;
   console.log(email, password);
-  console.log("sign in");
-  const query = { email: email, password: password };
-  User.findOne(query, function (err, user) {
+  const query = { email: email };
+  // find user by email
+  User.findOne(query, async function (err, user) {
     if (err) {
       console.log("error");
       console.error(err);
-      res
-        .status(422)
-        .json({ success: false, message: "Could not find this user" });
+      res.status(422).json({
+        success: false,
+        message: `Could not find user with email ${email}`,
+      });
     } else {
-      console.log("user");
-      console.log(user);
-      if (user) {
-        const token = jwt.sign({ _id: user._id }, "secretPutInEnvFile");
-        res.status(200).json(token);
+      console.log("email match - user found");
+      console.log(user.password);
+      // check if the password is correct
+      const isValid = await bcrypt.compare(password, user.password);
+      console.log("password is valid: ");
+      console.log(isValid);
+      if (isValid) {
+        console.log("user");
+        console.log(user);
+        const token = jwt.sign({ _id: user._id }, process.env.jwt_secret);
+        res.status(200).json({
+          success: true,
+          token: token,
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: "The password is not correct",
+        });
       }
     }
   });
@@ -75,6 +120,19 @@ app.get("/auth", async (req, res) => {
     }
   });
 });
+
+app.delete(
+  "/sandbox/:id",
+  passport.authenticate("jwt", { session: false }),
+  async (req, res) => {
+    const id = req.params.id;
+    console.log(id);
+    res.json({
+      message:
+        "You were authenticated to delete a document in the sandbox collection",
+    });
+  }
+);
 
 app.listen(port, () => {
   console.log(`Travel destinations app listening on port ${port}`);
